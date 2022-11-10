@@ -1,0 +1,65 @@
+
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    {
+        // "version": "0.2.0",
+        "projectName": "STM32project",
+        "configurations": [
+            
+            {
+                "name": "Debug (OpenOCD)",
+                "cwd": "${workspaceRoot}",
+                "executable": "${workspaceRoot}/target/thumbv7m-none-eabi/debug/uRustOS",
+                "request": "launch",
+                "type": "cortex-debug",
+                "servertype": "openocd",
+                "configFiles": [
+                    "/home/zaki/Desktop/Tampere M1/BareMetal rust/uRustOS/debug_scripts/stlink-v2-1.cfg",
+                    "/home/zaki/Desktop/Tampere M1/BareMetal rust/uRustOS/debug_scripts/stm32f1x.cfg"
+                ],
+                "device": "STM32F103C8",
+                "runToMain": true, // else it starts at reset handler - not interested
+                "preLaunchTask": "build debug", // configured in tasks.json
+                "svdFile": "${workspaceRoot}/debug_scripts/STM32F103.svd", // Include svd to watch device peripherals
+                "swoConfig": {
+                    "enabled": true,
+                    "cpuFrequency": 8000000,
+                    "swoFrequency": 2000000,
+                    "source": "probe",
+                    "decoders": [
+                        { "type": "console", "label": "ITM", "port": 0 }
+                    ]
+                },
+            },
+            {
+                "name": "STlink launch",
+                "cwd": "${workspaceRoot}",
+                "executable": "${workspaceRoot}/target/thumbv7m-none-eabi/debug/uRustOS",
+                "request": "launch",
+                "type": "cortex-debug",
+                "servertype": "stutil",
+                "device": "STM32F103C8",
+                "interface": "swd",
+                "runToMain": true, // else it starts at reset handler - not interested
+                "preLaunchTask": "build debug", // configured in tasks.json
+                // "preLaunchCommands": ["cargo build"], // you can execute command instead of task
+                "svdFile": "${workspaceRoot}/debug_scripts/STM32F103.svd", // Include svd to watch device peripherals
+                "swoConfig": {} 
+            },
+            {
+                "name": "STlink attach",
+                "cwd": "${workspaceRoot}",
+                "executable": "${workspaceRoot}/target/thumbv7m-none-eabi/debug/uRustOS",
+                "request": "attach",
+                "type": "cortex-debug",
+                "servertype": "stutil",
+                "device": "STM32F103C8",
+                "interface": "swd",
+                // "preLaunchTask": "build all", // configured in tasks.json
+                // "preLaunchCommands": ["Build all"], // you can execute command instead of task
+                "svdFile": "${workspaceRoot}/debug_scripts/STM32F103.svd", // Include svd to watch device peripherals
+                "swoConfig": {} // currently (v1.7.0) not supported
+            },
+        ]
+    }

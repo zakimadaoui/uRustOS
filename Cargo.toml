@@ -1,5 +1,5 @@
 [package]
-name = "urustOS"
+name = "uRustOS"
 version = "0.1.0"
 edition = "2021"
 

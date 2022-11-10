@@ -4,9 +4,18 @@
 // }
 
 {
+
+    "cortex-debug.gdbPath": "/usr/local/arm-gcc/bin/arm-none-eabi-gdb",
+    "cortex-debug.openocdPath": "/usr/bin/openocd",
+    "cortex-debug.stutilPath": "/usr/bin/st-util",
+
+
+
+    "rust-analyzer.linkedProjects": ["Cargo.toml"],
     "rust-analyzer.checkOnSave.allTargets": false,
     "rust-analyzer.checkOnSave.extraArgs": [
         "--target",
         "thumbv7m-none-eabi"
-    ]
+    ],
+    "cortex-debug.registerUseNaturalFormat": false
 }
