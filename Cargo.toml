@@ -9,8 +9,10 @@ edition = "2021"
 cortex-m = "0.7.6"
 cortex-m-rt = "0.7.1"
 embedded-hal = "0.2.7"
+fugit = "0.3.6"
 nb = "1.0.0"
 panic-halt = "0.2.0"
+volatile-register = "0.2.1"
 
 # equivalent to stm32f1xx-hal = { version = "0.9.0", ["rt", "stm32f103", "medium"] }
 [dependencies.stm32f1xx-hal]
