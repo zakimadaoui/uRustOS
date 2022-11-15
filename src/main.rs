@@ -4,20 +4,20 @@
  * [x] the scheduler (85% of this project)!
  * [x] use systic instead of timer 1
  * [ ] setup EXCEPTION priorities
- * [ ] test tail chaining, otherwise move the scheduler to systic handler
- * [ ] make a thread pool and use that for the schedueler
+ * [x] test tail chaining, otherwise move the scheduler to systic handler
+ * [x] make a thread pool and use that for the schedueler
+ * [x] return an option from OSTread::new() instead of Self to check for min/max stack size
  * [ ] use slices and life times to own the stack array
- * [ ] return an option from OSTread::new() instead of Self to check for min/max stack size
  * [ ] mutex
  * [ ] semaphore
  * [ ] queues
  * [ ] OSdelay that sleeps ?
  * [ ] turn into a rust library and improve the api
  * [ ] Add documentation in github how to use the framwork
- * 
- * 
- * 
- * later additions 
+ *
+ *
+ *
+ * later additions
  * [ ] minimal runtime wehere
  *      * all interrupts are given lower priotiy than the defult which is MAX
  *      * enable the use of thread SP and main SP to run in protected mode
@@ -30,23 +30,22 @@ use cortex_m::iprintln;
 use panic_halt as _;
 use stm32f1xx_hal::{
     gpio::{gpioc, Output, PushPull},
-    pac::{interrupt, Interrupt, Peripherals, TIM2},
+    pac::{Peripherals},
     prelude::*,
-    timer::{CounterMs, Event},
 };
 // use core::cell::RefCell;
 // use cortex_m::{asm::wfi, interrupt::Mutex};
 use cortex_m_rt::entry;
 
-
 //====================================== OS =========================================
 mod OS {
 
-    use core::{arch::asm, hash::Hasher};
+    //includes
+    use core::{arch::asm};
     use fugit::HertzU32 as Hertz;
+    use volatile_register::RW;
 
-
-    use volatile_register::{RW};
+    //+++++++++++++++++++++++++++ Core Peripherals ++++++++++++++++++++++++++++++++++
 
     #[repr(C)]
     struct SysTick {
@@ -54,23 +53,8 @@ mod OS {
         pub rvr: RW<u32>,
         pub cvr: RW<u32>,
     }
-    
-    pub fn OSInit(sysclk : Hertz) {
-        unsafe{
-            __interrupts_disable();
 
-            //try to calclulate SysTick Reload value register to get 4ms period
-            let value = 4*sysclk.to_kHz(); /*4 ms* f_hz = 4*f_khz */
-            // configure systic
-            let systick = &mut *(0xE000_E010 as *mut SysTick);
-            systick.rvr.write(value);
-            systick.cvr.write(0);
-            systick.csr.write(0x0000_0003);
-            // TODO: set priorities for pendSV and systick
-
-            __interrupts_enable();
-        }
-    }
+    //++++++++++++++++++++++++++++ util functions +++++++++++++++++++++++++++++++++++
 
     /*
     this function generates a software exception,
@@ -82,7 +66,6 @@ mod OS {
         // Interrupt control and status register
         // to trigger a software interrupt
         unsafe {
-            //TODO: make this atomic OR operation (if there is an instruction or almost atomic)
             let icsr = 0xE000ED04 as *mut u32;
             let new_val = core::ptr::read_volatile(icsr) | 1 << 28;
             core::ptr::write_volatile(icsr, new_val);
@@ -90,37 +73,26 @@ mod OS {
     }
 
     #[inline]
-    unsafe fn __interrupts_enable(){
+    unsafe fn __interrupts_enable() {
         asm!("CPSIE i");
     }
-    
+
     #[inline]
-    unsafe fn __interrupts_disable(){
+    unsafe fn __interrupts_disable() {
         asm!("CPSID i");
     }
 
-    /* Warning: this fuction must b called in a critical section */
-    pub unsafe fn OS_Sched(/*Add cs proof later */) {
-        if thread_curr == m_thread1 {
-            thread_next = m_thread2;
-        } else {
-            thread_next = m_thread1;
-        }
-        // if(thread_curr != thread_next){
-        generate_soft_irq();
-        // }
-    }
+    //++++++++++++++++++++++++++++++ OS Structs +++++++++++++++++++++++++++++++++++++
 
     #[repr(C)]
     pub struct OSThread {
         //TCB
         sp: *mut u32, /* stack pointer*/
-                      /* other futur attributes related to the thread*/
-                      /* example:
-                          used stack by storing original sp as reference
-                          then comparing to it, very useful for debuggin mem corruptions
-                          stack size can also be stored to get percentage
-                          */
+                      /* other future attributes related to the thread go here*/
+                      //enabled: bool; //tells if the thread is enabled or stopped
+                      //timout: u32,   //used for delay
+                      //sp_init: u32,  //used for getting stack usage percentage
+                      //thread_nbr:u32 //can be used by OS::getThreadNumber()
     }
 
     impl OSThread {
@@ -128,6 +100,7 @@ mod OS {
             unsafe {
                 // get the bottom of the stack
                 let stack_begin = stack_arr.as_mut_ptr() as u32;
+
                 let mut sp: u32 = stack_begin + (stack_arr.len() * 4) as u32; /* times 4  because a word is 4x1byte */
 
                 // insure stack pointer alignment
@@ -153,7 +126,7 @@ mod OS {
                 (*sp.sub(15)) = 0xCAFE0005; /* R5 */
                 (*sp.sub(16)) = 0xCAFE0004; /* R4 */
 
-                // fill the rest of the stack with 0xDEADBEEF for debugging purposes
+                // fill the rest of the stack with 0xF005BA11 for debugging purposes
                 let mut i = 17;
                 let stack_begin = stack_begin as *mut u32;
                 loop {
@@ -170,6 +143,59 @@ mod OS {
                 OSThread { sp: sp }
             }
         }
+
+        pub fn schedule(&mut self) -> bool {
+            unsafe{
+                if thread_count < MAX_THREADS {
+                    os_thread[thread_count] = self as * mut OSThread;
+                    thread_count = thread_count +1;
+                    true
+                }else {
+                    false
+                }
+            }
+        }
+    }
+    //++++++++++++++++++++++++++++++ OS Variables +++++++++++++++++++++++++++++++++++
+    pub static mut thread_curr: *mut OSThread = 0 as *mut OSThread; //TODO: use voletile to access these, remember you are in interrupts world
+    pub static mut thread_next: *mut OSThread = 0 as *mut OSThread; //TODO: use voletile to access these, remember you are in interrupts world
+    
+    const MAX_THREADS : usize = 16;
+    static mut thread_count : usize = 0;
+    static mut thread_idx : usize = 0;
+    static mut os_thread : [*mut OSThread; MAX_THREADS + 1 ] = 
+                                [0 as * mut OSThread; MAX_THREADS +1]; // thread pool 
+    //++++++++++++++++++++++++++++++ OS Functions +++++++++++++++++++++++++++++++++++
+
+    pub fn os_run(sysclk: Hertz) -> bool {
+        unsafe {
+            if (os_thread[0] as u32) == 0 { //check if no thread was scheduled
+                return false
+            }
+            __interrupts_disable();
+            //try to calclulate SysTick Reload value register to get 4ms period
+            let value = 4 * sysclk.to_kHz(); /*4 ms* f_hz = 4*f_khz */
+            // configure systic
+            let systick = &mut *(0xE000_E010 as *mut SysTick);
+            systick.rvr.write(value);
+            systick.cvr.write(0);
+            systick.csr.write(0x0000_0003);
+            // TODO: set priorities for pendSV and systick
+
+            //start the scheduler (otherwize you need to wait 4ms for the timer)
+            os_sched();
+            __interrupts_enable();
+            return true /* unreachable code here */
+        }
+    }
+
+    /* Warning: this fuction must b called in a critical section */
+    //Round robin scheduler lives here
+    unsafe fn os_sched() {
+        if thread_count == 0 {return}
+        thread_next = os_thread[thread_idx];
+        thread_idx = (thread_idx+1) % thread_count;
+        generate_soft_irq();
     }
 
     #[allow(non_snake_case)]
@@ -184,9 +210,6 @@ mod OS {
             );
 
             /*save current context*/
-            // TODO: store main thread main thread if thread curr = 0 and move content
-            // of the upcomming branch outside.
-            // current_thread = thread_pool[0]; 
             if thread_curr as u32 != 0 {
                 asm!(
                     "push {{r4-r11}}",  /*Push regs R4-R11 to stack */
@@ -224,12 +247,11 @@ mod OS {
 
             /* DO STUFF */
             __interrupts_disable();
-            OS_Sched();
+            os_sched();
             __interrupts_enable();
 
             //replace llvm return with expected ARM ISR return instruction
-            asm!(/*"pop {{lr}}, [{}]",*/
-                /*"bx lr",*/
+            asm!(/*"bx lr",*/
                 "bx {}",
                 in(reg) 0xfffffff9 as u32,
                 options(noreturn));
@@ -237,30 +259,11 @@ mod OS {
     }
 
 
-    pub static mut thread_curr: *mut OSThread = 0 as *mut OSThread; //TODO: use voletile to access these, remember you are in interrupts world
-    pub static mut thread_next: *mut OSThread = 0 as *mut OSThread; //TODO: use voletile to access these, remember you are in interrupts world
-
-    pub static mut m_thread1: *mut OSThread = 0 as *mut OSThread;
-    pub static mut m_thread2: *mut OSThread = 0 as *mut OSThread;
-}
-
-use OS::*;
-
-#[interrupt]
-unsafe fn TIM2() {
-    if let Some(tim) = G_TIM.as_mut() {
-        if let Some(led) = G_LED.as_mut() {
-            let _ = led.toggle();
-        }
-
-        let _ = tim.wait();
-        cortex_m::interrupt::free(|cs| {
-            OS_Sched();
-        });
-    }
 }
 
 //===================================================================================
+
+use OS::*;
 
 // A type definition for the GPIO pin to be used for our LED
 type LedPin = gpioc::PC13<Output<PushPull>>;
@@ -268,8 +271,6 @@ type LedPin = gpioc::PC13<Output<PushPull>>;
 // Make LED pin globally available
 static mut G_LED: Option<LedPin> = None;
 
-// Make timer interrupt registers globally available
-static mut G_TIM: Option<CounterMs<TIM2>> = None;
 
 #[entry]
 fn main() -> ! {
@@ -290,59 +291,46 @@ fn main() -> ! {
     let _ = led.set_low(); // Turn off
 
 
-    // Move the pin into our global storage
-    unsafe {
-        G_LED = Some(led);
-    }
-    // Set up a timer expiring after 1s
-    let mut timer = dp.TIM2.counter_ms(&clocks);
-    // timer.start(500.millis()).unwrap();
-
-    // Generate an interrupt when the timer expires
-    // timer.listen(Event::Update);
-
-    // Move the timer into our global storage
-    unsafe {
-        G_TIM = Some(timer);
-    }
-
-    // Unmask timer interrupt bit to enable it.
-    unsafe {
-        cortex_m::peripheral::NVIC::unmask(Interrupt::TIM2);
-        // cortex_m::peripheral::NVIC::set_priority( PendSV, 1);
-    }
-
     let cp = cortex_m::Peripherals::take().unwrap();
     let mut itm = cp.ITM;
 
     let mut stack1: [u32; 100] = [1; 100];
     let mut thread1 = OSThread::new(&mut stack1, thread1_run);
-    unsafe {
-        m_thread1 = &mut thread1;
-    }
-
+    thread1.schedule();
+    
     let mut stack2: [u32; 100] = [2; 100];
     let mut thread2 = OSThread::new(&mut stack2, thread2_run);
-    unsafe {
-        m_thread2 = &mut thread2;
+    thread2.schedule();
+    
+    let mut stack3: [u32; 100] = [2; 100];
+    let mut thread3 = OSThread::new(&mut stack3, thread3_run);
+    thread3.schedule();
+    
+    let status : bool = OS::os_run(8.MHz());
+
+    if status  {
+        // if the os succeeds to run then this is unreachable code, control will 
+        // never go back to main
+    } else {
+        // OS was not able to run since there is no
     }
 
-    OS::OSInit(8.MHz());
+    // if the os succeeds to run then this is unreachable code, control will never go
+    // back to main
 
     loop {
         // wfi(); // this causes issues with serial debug, do not enable for now !
-        iprintln!(&mut itm.stim[0], "Hello, world!");
-        blink();
+        // iprintln!(&mut itm.stim[0], "Hello, world!");
     }
 }
 
-static mut G_COUNT : u32 = 0;
+static mut G_COUNT: u32 = 0;
 
 fn thread1_run() {
     let mut id = 1;
     unsafe {
         loop {
-            G_COUNT=id;
+            G_COUNT = id;
             id += 2;
         }
     }
@@ -352,11 +340,24 @@ fn thread2_run() {
     let mut id = 2;
     unsafe {
         loop {
-            G_COUNT=id;
+            G_COUNT = id;
             id += 2;
         }
     }
 }
+
+
+fn thread3_run() {
+    let mut id = 3;
+    unsafe {
+        loop {
+            G_COUNT = id;
+            id += 3;
+        }
+    }
+}
+
+
 fn blink() -> ! {
     let mut led;
     unsafe {
