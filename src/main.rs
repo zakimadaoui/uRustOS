@@ -7,18 +7,20 @@
  * [x] test tail chaining, otherwise move the scheduler to systic handler
  * [x] make a thread pool and use that for the schedueler
  * [x] return an option from OSTread::new() instead of Self to check for min/max stack size
- * [ ] use slices and life times to own the stack array
  * [ ] mutex
  * [ ] semaphore
+ * [ ] non blocking OSdelay (run other threads while waiting) ?
+ * [ ] thred nbr, stop and start.
  * [ ] queues
- * [ ] OSdelay that sleeps ?
  * [ ] turn into a rust library and improve the api
- * [ ] Add documentation in github how to use the framwork
+ * [ ] own the stack array to avoid copy-past stack bugs
+ * [ ] Add documentation in github how to use the framework
  *
  *
  *
- * later additions
- * [ ] minimal runtime wehere
+ * future improvments
+ * [ ] add priority scheduling
+ * [ ] minimal runtime wehere:
  *      * all interrupts are given lower priotiy than the defult which is MAX
  *      * enable the use of thread SP and main SP to run in protected mode
  */
@@ -88,11 +90,12 @@ mod OS {
     pub struct OSThread {
         //TCB
         sp: *mut u32, /* stack pointer*/
-                      /* other future attributes related to the thread go here*/
-                      //enabled: bool; //tells if the thread is enabled or stopped
-                      //timout: u32,   //used for delay
-                      //sp_init: u32,  //used for getting stack usage percentage
-                      //thread_nbr:u32 //can be used by OS::getThreadNumber()
+        timeout : u32, /* used for delay funcionality */
+        /* other future attributes related to the thread go here*/
+        //enabled: bool; //tells if the thread is enabled or stopped
+        //timout: u32,   //used for delay
+        //sp_init: u32,  //used for getting stack usage percentage
+        //thread_nbr:u32 //can be used by OS::getThreadNumber()
     }
 
     impl OSThread {
@@ -140,7 +143,7 @@ mod OS {
 
                 // store fake sp in TCB + make sure to store the offseted version
                 sp = sp.sub(16);
-                OSThread { sp: sp }
+                OSThread { sp: sp, timeout : 0 }
             }
         }
 
@@ -148,6 +151,7 @@ mod OS {
             unsafe{
                 if thread_count < MAX_THREADS {
                     os_thread[thread_count] = self as * mut OSThread;
+                    is_ready_flags |= 0x1 << (thread_count -1);
                     thread_count = thread_count +1;
                     true
                 }else {
@@ -157,30 +161,40 @@ mod OS {
         }
     }
     //++++++++++++++++++++++++++++++ OS Variables +++++++++++++++++++++++++++++++++++
-    pub static mut thread_curr: *mut OSThread = 0 as *mut OSThread; //TODO: use voletile to access these, remember you are in interrupts world
-    pub static mut thread_next: *mut OSThread = 0 as *mut OSThread; //TODO: use voletile to access these, remember you are in interrupts world
-    
+    pub static mut thread_curr: *mut OSThread = 0 as *mut OSThread; 
+    pub static mut thread_next: *mut OSThread = 0 as *mut OSThread; 
+
+    static mut is_ready_flags : u16 = 0;
+
     const MAX_THREADS : usize = 16;
-    static mut thread_count : usize = 0;
+    const TIME_SLICE : u32 = 4;
+    static mut thread_count : usize = 1;
     static mut thread_idx : usize = 0;
     static mut os_thread : [*mut OSThread; MAX_THREADS + 1 ] = 
-                                [0 as * mut OSThread; MAX_THREADS +1]; // thread pool 
+                                [0 as * mut OSThread; MAX_THREADS +1]; // thread pool
+                                
+    static mut idle_thread_stack : [u32; 40] = [0; 40];
+    static mut idle_thread: OSThread = OSThread {sp:0 as *mut u32, timeout:0};
     //++++++++++++++++++++++++++++++ OS Functions +++++++++++++++++++++++++++++++++++
 
     pub fn os_run(sysclk: Hertz) -> bool {
         unsafe {
-            if (os_thread[0] as u32) == 0 { //check if no thread was scheduled
+            if (os_thread[1] as u32) == 0 { //check if no thread was scheduled
                 return false
             }
             __interrupts_disable();
             //try to calclulate SysTick Reload value register to get 4ms period
-            let value = 4 * sysclk.to_kHz(); /*4 ms* f_hz = 4*f_khz */
+            let value = TIME_SLICE * sysclk.to_kHz(); /*4 ms* f_hz = 4*f_khz */
             // configure systic
             let systick = &mut *(0xE000_E010 as *mut SysTick);
             systick.rvr.write(value);
             systick.cvr.write(0);
             systick.csr.write(0x0000_0003);
             // TODO: set priorities for pendSV and systick
+            
+            //schedule idle thread
+            idle_thread = OSThread::new(&mut idle_thread_stack, idle_thread_handler);
+            os_thread[0] = &mut idle_thread as * mut OSThread;
 
             //start the scheduler (otherwize you need to wait 4ms for the timer)
             os_sched();
@@ -189,13 +203,64 @@ mod OS {
         }
     }
 
+    fn idle_thread_handler(){
+        loop{
+            // unsafe {asm!("wfi");}
+            unsafe {asm!("nop");}
+        }
+    }
+
+    /* this function puts the caller thread to sleep untill the delay time elapses
+    the delay should be above 4*num_threads milliseconds to be accurate.
+    WARNING: never call this function in main (ie, before os_run()) */
+    pub fn os_delay(mut delay: u32){
+        unsafe {
+            __interrupts_disable();
+            //correct delay to 4ms accuracy
+            delay = delay / TIME_SLICE ;
+            delay = delay * TIME_SLICE ;
+            //check for null (maybe someone calls this in main)
+            if thread_curr as u32 == 0 {return} 
+            //update thread timeout feild
+            (*thread_curr).timeout = delay;
+            //set thread as no ready
+            is_ready_flags &= !(0x1 << (thread_idx -1)); //clear is ready flag
+            os_sched();//call the scheduler
+            __interrupts_enable();
+        }
+    }
+
+    unsafe fn os_tick(){
+        let mut i  = 1;
+        loop{
+            if i == thread_count  {break;}
+            if (*os_thread[i]).timeout > 0 {
+                (*os_thread[i]).timeout-=4;
+                
+                if (*os_thread[i]).timeout == 0 {
+                    is_ready_flags |= 0x1 << (i -1); //set thread to ready
+                }   
+            }
+            i+=1;
+        }
+        // for i in 1..count {
+        //     
+        // }
+    }
+
     /* Warning: this fuction must b called in a critical section */
     //Round robin scheduler lives here
     unsafe fn os_sched() {
-        if thread_count == 0 {return}
+        if is_ready_flags == 0 {
+            thread_idx = 0;
+        } else { //look for the next ready thread
+            loop{
+                thread_idx = (thread_idx) % thread_count +1;
+                if ( is_ready_flags & 0x1<<(thread_idx-1) ) != 0 {break;}
+            }
+        }
         thread_next = os_thread[thread_idx];
-        thread_idx = (thread_idx+1) % thread_count;
-        generate_soft_irq();
+        if(thread_next!= thread_curr) {generate_soft_irq();} //call pendSV to run next thead
     }
 
     #[allow(non_snake_case)]
@@ -247,6 +312,7 @@ mod OS {
 
             /* DO STUFF */
             __interrupts_disable();
+            os_tick();
             os_sched();
             __interrupts_enable();
 
@@ -264,12 +330,14 @@ mod OS {
 //===================================================================================
 
 use OS::*;
+use cortex_m::peripheral::ITM;
 
 // A type definition for the GPIO pin to be used for our LED
 type LedPin = gpioc::PC13<Output<PushPull>>;
 
 // Make LED pin globally available
 static mut G_LED: Option<LedPin> = None;
+static mut G_ITM: Option<ITM> = None;
 
 
 #[entry]
@@ -294,15 +362,20 @@ fn main() -> ! {
     let cp = cortex_m::Peripherals::take().unwrap();
     let mut itm = cp.ITM;
 
-    let mut stack1: [u32; 100] = [1; 100];
+    unsafe{ 
+        G_LED = Some(led);
+        G_ITM = Some(itm);
+    }
+
+    let mut stack1: [u32; 500] = [1; 500];
     let mut thread1 = OSThread::new(&mut stack1, thread1_run);
     thread1.schedule();
     
-    let mut stack2: [u32; 100] = [2; 100];
+    let mut stack2: [u32; 500] = [2; 500];
     let mut thread2 = OSThread::new(&mut stack2, thread2_run);
     thread2.schedule();
     
-    let mut stack3: [u32; 100] = [2; 100];
+    let mut stack3: [u32; 500] = [2; 500];
     let mut thread3 = OSThread::new(&mut stack3, thread3_run);
     thread3.schedule();
     
@@ -324,35 +397,41 @@ fn main() -> ! {
     }
 }
 
-static mut G_COUNT: u32 = 0;
+// static mut G_COUNT: u32 = 0;
+
+// fn thread1_run() {
+//     let mut id = 1;
+//     unsafe {
+//         loop {
+//             G_COUNT = id;
+//             id += 2;
+//         }
+//     }
+// }
 
 fn thread1_run() {
-    let mut id = 1;
     unsafe {
-        loop {
-            G_COUNT = id;
-            id += 2;
+        loop{
+            iprintln!(&mut G_ITM.as_mut().unwrap().stim[0], "hello thread 1!\n");
+            os_delay(1000);
         }
     }
 }
 
 fn thread2_run() {
-    let mut id = 2;
     unsafe {
-        loop {
-            G_COUNT = id;
-            id += 2;
+        loop{
+            iprintln!(&mut G_ITM.as_mut().unwrap().stim[0], "hello thread 2!\n");
+            os_delay(1000);
         }
     }
 }
 
-
 fn thread3_run() {
-    let mut id = 3;
     unsafe {
-        loop {
-            G_COUNT = id;
-            id += 3;
+        loop{
+            iprintln!(&mut G_ITM.as_mut().unwrap().stim[0], "hello thread 3!\n");
+            os_delay(1000);
         }
     }
 }
