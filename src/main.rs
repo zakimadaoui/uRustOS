@@ -3,13 +3,13 @@
  * [x] basic thread API
  * [x] the scheduler (85% of this project)!
  * [x] use systic instead of timer 1
- * [ ] setup EXCEPTION priorities
  * [x] test tail chaining, otherwise move the scheduler to systic handler
  * [x] make a thread pool and use that for the schedueler
  * [x] return an option from OSTread::new() instead of Self to check for min/max stack size
- * [ ] mutex
- * [ ] semaphore
- * [ ] non blocking OSdelay (run other threads while waiting) ?
+ * [x] mutex
+ * [x] semaphore
+ * [x] non blocking OSdelay (run other threads while waiting) ?
+ * [ ] setup EXCEPTION priorities
  * [ ] thred nbr, stop and start.
  * [ ] queues
  * [ ] turn into a rust library and improve the api
@@ -392,7 +392,7 @@ type LedPin = gpioc::PC13<Output<PushPull>>;
 // Make LED pin globally available
 static mut G_LED: Option<LedPin> = None;
 static mut G_ITM: Option<ITM> = None;
-static mut MUTEX: u32 = 1;
+static mut MUTEX: u32 = 3;
 
 #[entry]
 fn main() -> ! {
@@ -454,25 +454,18 @@ fn main() -> ! {
     }
 }
 
-// static mut G_COUNT: u32 = 0;
 
-// fn thread1_run() {
-//     let mut id = 1;
-//     unsafe {
-//         loop {
-//             G_COUNT = id;
-//             id += 2;
-//         }
-//     }
-// }
+//TODO: how to do you know that semaphores are working ?? well if you fall into 
+// starvation then you know they are working aaalright !
 
+//TODO: try to increment and display a counter with and without semaphores 
 fn thread1_run() {
     unsafe {
         loop{
             sem_lock(&mut MUTEX);
             iprintln!(&mut G_ITM.as_mut().unwrap().stim[0], "hello thread 1!\n");
             sem_unlock(&mut MUTEX);
-            os_delay(16);
+            // os_delay(16); //add some delay to avoid starvation !!!
         }
     }
 }
@@ -483,7 +476,7 @@ fn thread2_run() {
             sem_lock(&mut MUTEX);
             iprintln!(&mut G_ITM.as_mut().unwrap().stim[0], "hello thread 2!\n");
             sem_unlock(&mut MUTEX);
-            os_delay(20);
+            // os_delay(20);
         }
     }
 }
@@ -494,7 +487,7 @@ fn thread3_run() {
             sem_lock(&mut MUTEX);
             iprintln!(&mut G_ITM.as_mut().unwrap().stim[0], "hello thread 3!\n");
             sem_unlock(&mut MUTEX);
-            os_delay(10);
+            // os_delay(10);
         }
     }
 }
