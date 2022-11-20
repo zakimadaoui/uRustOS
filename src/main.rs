@@ -160,6 +160,60 @@ mod OS {
             }
         }
     }
+
+    pub fn sem_lock(sem: &mut u32){
+        unsafe{
+            // let mut val : u32 = 77;
+            asm!(
+                "1:",
+                "MOV     R5,#0x1",
+                "LDREX   R4, [{0}]",     // load sem value and tag memory location
+                "CMP     R4, #0",        // is semaphore consumed ?
+                "ITTT    NE",            // IT block for next 3 instructions
+                "SUBNE   R4, R4, #1",    // dec sem IF sem is not 0
+                "STREXNE R5, R4, [{0}]", // store exclusive IF sem is not 0
+                "CMPNE   R5, #0",        // see if operation is successful
+                "BNE     2f",            // break from the loop if successful
+                "CMP     R5, #0",
+                "BEQ     2f",            
+                in(reg) sem as *mut u32
+            );
+            //TODO: you can disable this section to create a spin lock !
+            // __interrupts_disable();
+            // os_sched();
+            // __interrupts_enable();
+            asm!(
+                "B      1b",//retry by looping
+                "2:     ", //break loop lable
+            );
+        }
+
+    }
+    
+    pub fn sem_unlock(sem: &mut u32){
+        unsafe{
+            // let mut val : u32 = 77;
+            asm!(
+                "1:",
+                "MOV     R5,#0x1",
+                "LDREX   R4, [{0}]",     // load sem value and tag memory location
+                "ADD     R4, R4, #1",    // dec sem IF sem is not 0
+                "STREX   R5, R4, [{0}]", // store exclusive IF sem is not 0
+                "CMP     R5, #0",        // see if operation is successful
+                "BEQ     2f",            // break from the loop if successful        
+                in(reg) sem as *mut u32
+            );
+            //TODO: you can disable this section to create a spinlock !
+            // __interrupts_disable();
+            // os_sched();
+            // __interrupts_enable();
+            asm!(
+                "B      1b",//retry by looping
+                "2:     ", //break loop lable
+            );
+        }
+    }
+
     //++++++++++++++++++++++++++++++ OS Variables +++++++++++++++++++++++++++++++++++
     pub static mut thread_curr: *mut OSThread = 0 as *mut OSThread; 
     pub static mut thread_next: *mut OSThread = 0 as *mut OSThread; 
@@ -338,10 +392,13 @@ type LedPin = gpioc::PC13<Output<PushPull>>;
 // Make LED pin globally available
 static mut G_LED: Option<LedPin> = None;
 static mut G_ITM: Option<ITM> = None;
-
+static mut MUTEX: u32 = 1;
 
 #[entry]
 fn main() -> ! {
+
+    let mut sem: u32 = 1;
+
     let dp = Peripherals::take().unwrap();
 
     let rcc = dp.RCC.constrain();
@@ -412,8 +469,10 @@ fn main() -> ! {
 fn thread1_run() {
     unsafe {
         loop{
+            sem_lock(&mut MUTEX);
             iprintln!(&mut G_ITM.as_mut().unwrap().stim[0], "hello thread 1!\n");
-            os_delay(1000);
+            sem_unlock(&mut MUTEX);
+            os_delay(16);
         }
     }
 }
@@ -421,8 +480,10 @@ fn thread1_run() {
 fn thread2_run() {
     unsafe {
         loop{
+            sem_lock(&mut MUTEX);
             iprintln!(&mut G_ITM.as_mut().unwrap().stim[0], "hello thread 2!\n");
-            os_delay(1000);
+            sem_unlock(&mut MUTEX);
+            os_delay(20);
         }
     }
 }
@@ -430,8 +491,10 @@ fn thread2_run() {
 fn thread3_run() {
     unsafe {
         loop{
+            sem_lock(&mut MUTEX);
             iprintln!(&mut G_ITM.as_mut().unwrap().stim[0], "hello thread 3!\n");
-            os_delay(1000);
+            sem_unlock(&mut MUTEX);
+            os_delay(10);
         }
     }
 }
