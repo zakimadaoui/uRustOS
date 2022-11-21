@@ -9,10 +9,11 @@
  * [x] mutex
  * [x] semaphore
  * [x] non blocking OSdelay (run other threads while waiting) ?
+ * [x] queues
+ * [ ] thred nbr, stop and start. + add it to example
  * [ ] setup EXCEPTION priorities
- * [ ] thred nbr, stop and start.
- * [ ] queues
- * [ ] turn into a rust library and improve the api
+ * [ ] turn into a rust library
+ * [ ] re-enable _wfi and test if all is alright !?
  * [ ] own the stack array to avoid copy-past stack bugs
  * [ ] Add documentation in github how to use the framework
  * [ ] mention that it has zero latency semaphores
@@ -23,22 +24,20 @@
  * future improvments
  * [ ] add priority scheduling
  * [ ] minimal runtime wehere:
- *      * all interrupts are given lower priotiy than the defult which is MAX
+ *      * all interrupts are given lower priority than the defult which is MAX
  *      * enable the use of thread SP and main SP to run in protected mode
  */
 
 #![no_main]
 #![no_std]
 
-use cortex_m::iprintln;
 use panic_halt as _;
 use stm32f1xx_hal::{
     gpio::{gpioc, Output, PushPull},
     pac::{Peripherals},
     prelude::*,
 };
-// use core::cell::RefCell;
-// use cortex_m::{asm::wfi, interrupt::Mutex};
+
 use cortex_m_rt::entry;
 
 //====================================== OS =========================================
@@ -168,8 +167,7 @@ mod OS {
         lock_counter: u32,
     }
     impl Semaphore {
-        pub const fn new_sem(mut init_val: u32) -> Self{
-            if init_val == 0 {init_val = 1;}
+        pub const fn new_sem(init_val: u32) -> Self{
             Semaphore{lock_counter:init_val}
         }
 
@@ -177,7 +175,7 @@ mod OS {
             Semaphore{lock_counter:1}
         }
 
-        pub fn lock(&mut self){
+        pub fn wait(&mut self){
             unsafe{
                 // let mut val : u32 = 77;
                 asm!(
@@ -194,19 +192,33 @@ mod OS {
                     "BEQ     2f",            
                     in(reg) &mut self.lock_counter as *mut u32
                 );
-                //TODO: you can disable this section to create a spin lock !
+                // TODO: you can disable this section to create a spin lock !
                 // __interrupts_disable();
-                // os_sched();
+                //os_sched();
                 // __interrupts_enable();
                 asm!(
                     "B      1b",//retry by looping
                     "2:     ", //break loop lable
                 );
             }
-    
+        }
+
+        pub fn wait2(&mut self){
+            unsafe{
+                loop{
+                    __interrupts_disable();
+                    if self.lock_counter != 0 {
+                        self.lock_counter = self.lock_counter -1;
+                        break;
+                    }
+                    os_sched();
+                    __interrupts_enable();
+                }
+
+            }
         }
         
-        pub fn unlock(&mut self){
+        pub fn signal(&mut self){
             unsafe{
                 // let mut val : u32 = 77;
                 asm!(
@@ -225,8 +237,76 @@ mod OS {
                 );
             }
         }
+        pub fn signal2(&mut self){
+            unsafe{
+                __interrupts_disable();
+                self.lock_counter = self.lock_counter +1;
+                __interrupts_enable();
+
+            }
+        }
     }
 
+
+    pub struct Queue<T:Copy, const N:usize>{
+        queueArr: [T; N],
+        full: Semaphore,
+        empty: Semaphore,
+        mutex: Semaphore,
+        count: usize,
+        max_count: usize,
+        head_idx: usize,
+        tail_idx: usize,
+    }
+
+    impl<T:Copy, const N:usize> Queue<T, N> {
+        pub const fn new(def_val: T) -> Self{
+            Self{
+                queueArr: [def_val; N],
+                full: Semaphore::new_sem(0),
+                empty: Semaphore::new_sem(N as u32),
+                mutex: Semaphore::new_mutex(),
+                count: 0,
+                max_count: N,
+                head_idx:  0,
+                tail_idx:  0,
+            }
+        }
+        
+        pub fn produce(&mut self, val: T){
+
+            self.empty.wait(); //wait if not empty (ie. full)
+            self.mutex.wait(); //cs begin
+            
+            //produce start
+            self.queueArr[self.head_idx] = val;
+            self.head_idx = (self.head_idx +1)%self.max_count;
+            self.count = self.count+ 1;
+            //produce end
+            
+            self.mutex.signal();
+            self.full.signal();
+        }
+
+        pub fn consume(&mut self) -> T {
+            let val : T;
+            self.full.wait();  //wait if empty
+            self.mutex.wait(); //cs begin
+            
+            //consume here
+            val = self.queueArr[self.tail_idx];
+            self.tail_idx = (self.tail_idx +1)%self.max_count;
+            self.count = self.count - 1 ;
+
+            self.mutex.signal(); //cs end
+            self.empty.signal(); // signal that one element has been freed
+            val
+        }
+
+        pub fn size(&mut self) -> usize{
+            self.count
+        }
+    }
     
 
     //++++++++++++++++++++++++++++++ OS Variables +++++++++++++++++++++++++++++++++++
@@ -439,16 +519,24 @@ fn main() -> ! {
         G_ITM = Some(itm);
     }
 
-    let mut stack1: [u32; 500] = [1; 500];
-    let mut thread1 = OSThread::new(&mut stack1, thread1_run);
-    thread1.schedule();
+    // let mut stack1: [u32; 500] = [1; 500];
+    // let mut thread1 = OSThread::new(&mut stack1, thread1_run);
+    // thread1.schedule();
+    
+    // let mut stack2: [u32; 500] = [2; 500];
+    // let mut thread2 = OSThread::new(&mut stack2, thread2_run);
+    // thread2.schedule();
+    
+    // let mut stack3: [u32; 500] = [2; 500];
+    // let mut thread3 = OSThread::new(&mut stack3, thread3_run);
+    // thread3.schedule();
     
     let mut stack2: [u32; 500] = [2; 500];
-    let mut thread2 = OSThread::new(&mut stack2, thread2_run);
+    let mut thread2 = OSThread::new(&mut stack2, producer_thread);
     thread2.schedule();
     
     let mut stack3: [u32; 500] = [2; 500];
-    let mut thread3 = OSThread::new(&mut stack3, thread3_run);
+    let mut thread3 = OSThread::new(&mut stack3, consumer_thread);
     thread3.schedule();
     
     let status : bool = OS::os_run(8.MHz());
@@ -473,21 +561,18 @@ use cortex_m::itm::write_fmt;
 
 static mut G_COUNTER: u32 = 0;
 static mut mutex: Semaphore = Semaphore::new_mutex();
-//TODO: how to do you know that semaphores are working ?? well if you fall into 
-// starvation then you know they are working aaalright !
-
 
 fn thread1_run() {
     unsafe {
         let mut local;
         loop{
-            mutex.lock();
+            mutex.wait();
             local = G_COUNTER + 1;
             for _ in 0..50 {}
             G_COUNTER = local;
             write_fmt(&mut G_ITM.as_mut().unwrap().stim[0], format_args!("1:{}\n",G_COUNTER));
             for _ in 0..50 {}
-            mutex.unlock();
+            mutex.signal();
             for _ in 0..99 {} //avoid starvation
             
         }
@@ -499,13 +584,13 @@ fn thread2_run() {
     unsafe {
         let mut local;
         loop{
-            mutex.lock();
+            mutex.wait();
             local = G_COUNTER + 1;
             for _ in 0..50 {}
             G_COUNTER = local;
             write_fmt(&mut G_ITM.as_mut().unwrap().stim[0], format_args!("2:{}\n",G_COUNTER));
             for _ in 0..50 {}
-            mutex.unlock();
+            mutex.signal();
             for _ in 0..99 {} //avoid starvation
             
         }
@@ -516,17 +601,44 @@ fn thread3_run() {
     unsafe {
         let mut local;
         loop{
-            mutex.lock();
+            mutex.wait();
             local = G_COUNTER + 1;
             for _ in 0..50 {}
             G_COUNTER = local;
             write_fmt(&mut G_ITM.as_mut().unwrap().stim[0], format_args!("3:{}\n",G_COUNTER));
             for _ in 0..50 {}
-            mutex.unlock();
+            mutex.signal();
             for _ in 0..99 {} //avoid starvation
         }
     }
 }
+
+
+static mut G_QUEUE : Queue<u32, 10> = Queue::new(0);
+fn producer_thread() {
+    unsafe {
+        let mut local = 0;
+        loop{
+            G_QUEUE.produce(local);
+            write_fmt(&mut G_ITM.as_mut().unwrap().stim[0], format_args!("P:{}\n",local));
+            local = local+1;
+            // for _ in 0..999 {} // some delay for visualization
+        }
+    }
+}
+
+fn consumer_thread() {
+    unsafe {
+        let mut local;
+        loop{
+            local = G_QUEUE.consume();
+            write_fmt(&mut G_ITM.as_mut().unwrap().stim[0], format_args!("C:{}\n",local));
+            // for _ in 0..999 {} // some delay for visualization
+        }
+    }
+}
+
+
 
 
 fn blink() -> ! {
