@@ -27,11 +27,12 @@
  * [x] queues
  * [x] thred nbr, stop and start. + add it to example
  * [x] turn into a rust library and run examples independently
+ * [ ] FIX SLEEP & MAKE BLINKY_OS EXAMPLE
  * [ ] setup EXCEPTION priorities
  * [ ] re-enable _wfi and test if all is alright !?
  * [ ] Add documentation in github how to use the framework
- * [ ] mention that it has zero latency semaphores
- * [ ] mention that it supports syscall like calls with pendSV
+ *     mention that it has zero latency semaphores
+ *     mention that it supports syscallS FOR SLEEP
  *
  *
  *
@@ -376,7 +377,7 @@ pub mod OS {
     /* this function puts the caller thread to sleep untill the delay time elapses
     the delay should be above 4*num_threads milliseconds to be accurate.
     WARNING: never call this function in main (ie, before os_run()) */
-    pub fn os_delay(mut delay: u32){
+    pub fn os_sleep(mut delay: u32){
         unsafe {
             __interrupts_disable();
             //correct delay to 4ms accuracy
