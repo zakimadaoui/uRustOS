@@ -15,6 +15,8 @@
  * [ ] turn into a rust library and improve the api
  * [ ] own the stack array to avoid copy-past stack bugs
  * [ ] Add documentation in github how to use the framework
+ * [ ] mention that it has zero latency semaphores
+ * [ ] mention that it supports syscall like calls with pendSV
  *
  *
  *
@@ -75,12 +77,12 @@ mod OS {
     }
 
     #[inline]
-    unsafe fn __interrupts_enable() {
+    pub unsafe fn __interrupts_enable() {
         asm!("CPSIE i");
     }
 
     #[inline]
-    unsafe fn __interrupts_disable() {
+    pub unsafe fn __interrupts_disable() {
         asm!("CPSID i");
     }
 
@@ -161,58 +163,71 @@ mod OS {
         }
     }
 
-    pub fn sem_lock(sem: &mut u32){
-        unsafe{
-            // let mut val : u32 = 77;
-            asm!(
-                "1:",
-                "MOV     R5,#0x1",
-                "LDREX   R4, [{0}]",     // load sem value and tag memory location
-                "CMP     R4, #0",        // is semaphore consumed ?
-                "ITTT    NE",            // IT block for next 3 instructions
-                "SUBNE   R4, R4, #1",    // dec sem IF sem is not 0
-                "STREXNE R5, R4, [{0}]", // store exclusive IF sem is not 0
-                "CMPNE   R5, #0",        // see if operation is successful
-                "BNE     2f",            // break from the loop if successful
-                "CMP     R5, #0",
-                "BEQ     2f",            
-                in(reg) sem as *mut u32
-            );
-            //TODO: you can disable this section to create a spin lock !
-            // __interrupts_disable();
-            // os_sched();
-            // __interrupts_enable();
-            asm!(
-                "B      1b",//retry by looping
-                "2:     ", //break loop lable
-            );
+
+    pub struct Semaphore{
+        lock_counter: u32,
+    }
+    impl Semaphore {
+        pub const fn new_sem(mut init_val: u32) -> Self{
+            if init_val == 0 {init_val = 1;}
+            Semaphore{lock_counter:init_val}
         }
 
-    }
+        pub const fn new_mutex() -> Self{
+            Semaphore{lock_counter:1}
+        }
+
+        pub fn lock(&mut self){
+            unsafe{
+                // let mut val : u32 = 77;
+                asm!(
+                    "1:",
+                    "MOV     R5,#0x1",
+                    "LDREX   R4, [{0}]",     // load sem value and tag memory location
+                    "CMP     R4, #0",        // is semaphore consumed ?
+                    "ITTT    NE",            // IT block for next 3 instructions
+                    "SUBNE   R4, R4, #1",    // dec sem IF sem is not 0
+                    "STREXNE R5, R4, [{0}]", // store exclusive IF sem is not 0
+                    "CMPNE   R5, #0",        // see if operation is successful
+                    "BNE     2f",            // break from the loop if successful
+                    "CMP     R5, #0",
+                    "BEQ     2f",            
+                    in(reg) &mut self.lock_counter as *mut u32
+                );
+                //TODO: you can disable this section to create a spin lock !
+                // __interrupts_disable();
+                // os_sched();
+                // __interrupts_enable();
+                asm!(
+                    "B      1b",//retry by looping
+                    "2:     ", //break loop lable
+                );
+            }
     
-    pub fn sem_unlock(sem: &mut u32){
-        unsafe{
-            // let mut val : u32 = 77;
-            asm!(
-                "1:",
-                "MOV     R5,#0x1",
-                "LDREX   R4, [{0}]",     // load sem value and tag memory location
-                "ADD     R4, R4, #1",    // dec sem IF sem is not 0
-                "STREX   R5, R4, [{0}]", // store exclusive IF sem is not 0
-                "CMP     R5, #0",        // see if operation is successful
-                "BEQ     2f",            // break from the loop if successful        
-                in(reg) sem as *mut u32
-            );
-            //TODO: you can disable this section to create a spinlock !
-            // __interrupts_disable();
-            // os_sched();
-            // __interrupts_enable();
-            asm!(
-                "B      1b",//retry by looping
-                "2:     ", //break loop lable
-            );
+        }
+        
+        pub fn unlock(&mut self){
+            unsafe{
+                // let mut val : u32 = 77;
+                asm!(
+                    "1:",
+                    "MOV     R5,#0x1",
+                    "LDREX   R4, [{0}]",     // load sem value and tag memory location
+                    "ADD     R4, R4, #1",    // dec sem IF sem is not 0
+                    "STREX   R5, R4, [{0}]", // store exclusive IF sem is not 0
+                    "CMP     R5, #0",        // see if operation is successful
+                    "BEQ     2f",            // break from the loop if successful        
+                    in(reg) &mut self.lock_counter as *mut u32
+                );
+                asm!(
+                    "B      1b",//retry by looping (this should never occur, even tests prove it)
+                    "2:     ", //break loop lable
+                );
+            }
         }
     }
+
+    
 
     //++++++++++++++++++++++++++++++ OS Variables +++++++++++++++++++++++++++++++++++
     pub static mut thread_curr: *mut OSThread = 0 as *mut OSThread; 
@@ -392,7 +407,7 @@ type LedPin = gpioc::PC13<Output<PushPull>>;
 // Make LED pin globally available
 static mut G_LED: Option<LedPin> = None;
 static mut G_ITM: Option<ITM> = None;
-static mut MUTEX: u32 = 3;
+static mut MUTEX: u32 = 1;
 
 #[entry]
 fn main() -> ! {
@@ -454,40 +469,61 @@ fn main() -> ! {
     }
 }
 
+use cortex_m::itm::write_fmt;
 
+static mut G_COUNTER: u32 = 0;
+static mut mutex: Semaphore = Semaphore::new_mutex();
 //TODO: how to do you know that semaphores are working ?? well if you fall into 
 // starvation then you know they are working aaalright !
 
-//TODO: try to increment and display a counter with and without semaphores 
+
 fn thread1_run() {
     unsafe {
+        let mut local;
         loop{
-            sem_lock(&mut MUTEX);
-            iprintln!(&mut G_ITM.as_mut().unwrap().stim[0], "hello thread 1!\n");
-            sem_unlock(&mut MUTEX);
-            // os_delay(16); //add some delay to avoid starvation !!!
+            mutex.lock();
+            local = G_COUNTER + 1;
+            for _ in 0..50 {}
+            G_COUNTER = local;
+            write_fmt(&mut G_ITM.as_mut().unwrap().stim[0], format_args!("1:{}\n",G_COUNTER));
+            for _ in 0..50 {}
+            mutex.unlock();
+            for _ in 0..99 {} //avoid starvation
+            
         }
+        
     }
 }
 
 fn thread2_run() {
     unsafe {
+        let mut local;
         loop{
-            sem_lock(&mut MUTEX);
-            iprintln!(&mut G_ITM.as_mut().unwrap().stim[0], "hello thread 2!\n");
-            sem_unlock(&mut MUTEX);
-            // os_delay(20);
+            mutex.lock();
+            local = G_COUNTER + 1;
+            for _ in 0..50 {}
+            G_COUNTER = local;
+            write_fmt(&mut G_ITM.as_mut().unwrap().stim[0], format_args!("2:{}\n",G_COUNTER));
+            for _ in 0..50 {}
+            mutex.unlock();
+            for _ in 0..99 {} //avoid starvation
+            
         }
     }
 }
 
 fn thread3_run() {
     unsafe {
+        let mut local;
         loop{
-            sem_lock(&mut MUTEX);
-            iprintln!(&mut G_ITM.as_mut().unwrap().stim[0], "hello thread 3!\n");
-            sem_unlock(&mut MUTEX);
-            // os_delay(10);
+            mutex.lock();
+            local = G_COUNTER + 1;
+            for _ in 0..50 {}
+            G_COUNTER = local;
+            write_fmt(&mut G_ITM.as_mut().unwrap().stim[0], format_args!("3:{}\n",G_COUNTER));
+            for _ in 0..50 {}
+            mutex.unlock();
+            for _ in 0..99 {} //avoid starvation
         }
     }
 }
