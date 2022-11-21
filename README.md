@@ -15,9 +15,9 @@ Please check the examples to see how to get the OS running ! and how to use its 
 
 
 ## Future improvments:
-[ ] stack usage for threads
-[ ] priority based scheduling
-[ ] safe sync premitives (currently can only be called in unsafe blocks)
+- [ ] stack usage for threads
+- [ ] priority based scheduling
+- [ ] safe sync premitives (currently can only be called in unsafe blocks)
 
 ## Warnings:
 
