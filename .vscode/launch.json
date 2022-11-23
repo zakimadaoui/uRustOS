@@ -10,7 +10,7 @@
             {
                 "name": "Debug (OpenOCD)",
                 "cwd": "${workspaceRoot}",
-                "executable": "${workspaceRoot}/target/thumbv7m-none-eabi/debug/uRustOS",
+                "executable": "${workspaceRoot}/target/thumbv7m-none-eabi/debug/examples/hello_os_blinky",
                 "request": "launch",
                 "type": "cortex-debug",
                 "servertype": "openocd",

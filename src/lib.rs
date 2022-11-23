@@ -14,7 +14,6 @@
 */
 
 /* TODOs:
- * improvments can be to
  * [x] basic thread API
  * [x] the scheduler (85% of this project)!
  * [x] use systic instead of timer 1
@@ -27,12 +26,10 @@
  * [x] queues
  * [x] thred nbr, stop and start. + add it to example
  * [x] turn into a rust library and run examples independently
- * [ ] FIX SLEEP & MAKE BLINKY_OS EXAMPLE
- * [ ] setup EXCEPTION priorities
- * [ ] re-enable _wfi and test if all is alright !?
- * [ ] Add documentation in github how to use the framework
- *     mention that it has zero latency semaphores
- *     mention that it supports syscallS FOR SLEEP
+ * [x] FIX SLEEP & MAKE BLINKY_OS EXAMPLE
+ * [x] re-enable _wfi and test if all is alright !?
+ * [ ] setup EXCEPTION priorities for tailchaining pendSV and Systick
+ * [-] Add good documentation in github how to use the framework
  *
  *
  *
@@ -353,7 +350,7 @@ pub mod OS {
             let systick = &mut *(0xE000_E010 as *mut SysTick);
             systick.rvr.write(value);
             systick.cvr.write(0);
-            systick.csr.write(0x0000_0003);
+            systick.csr.write(0x0000_0007);
             // TODO: set priorities for pendSV and systick
             
             //schedule idle thread
@@ -369,8 +366,8 @@ pub mod OS {
 
     fn idle_thread_handler(){
         loop{
-            // unsafe {asm!("wfi");}
-            unsafe {asm!("nop");}
+            unsafe {asm!("wfi");}
+            // unsafe {asm!("nop");}
         }
     }
 
@@ -407,9 +404,6 @@ pub mod OS {
             }
             i+=1;
         }
-        // for i in 1..count {
-        //     
-        // }
     }
 
     /* Warning: this fuction must b called in a critical section */
