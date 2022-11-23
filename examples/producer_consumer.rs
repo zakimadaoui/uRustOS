@@ -47,6 +47,8 @@ fn main() -> ! {
     let mut thread2 = OSThread::new(&mut stack2, consumer_thread);
     thread2.schedule();
     
+    // only call os_run after all the needed threads have been scheduled 
+    // os_run will start the OS scheduler
     let status : bool = os_run(8.MHz());
 
     if status  {
